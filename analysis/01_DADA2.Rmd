@@ -2,6 +2,8 @@
 title: "assigning ASVs with DADA2"
 output: html_document
 date: "r Sys.Date()"
+editor_options: 
+  chunk_output_type: console
 ---
 
 
@@ -15,14 +17,44 @@ knitr::opts_chunk$set(echo = TRUE,
 #symbolically link our data files
 
 We need to have access to our Fastq files for out project
+```
+#ran these commands to symbolically link
 
-#Goals of this file:
+cd SalinityGradient_16S
+mkdir data
+cd data
+mkdir 01_DADA2
+cd 01_DADA2
+mkdir 01_raw_gzipped_fastqs
 
-1. Load in the raw sequencing data
-2. Visualize and inspect sequencing data to assess the quality of the sequencing reads.
-3. Filter by the quality and trim primers from sequencing data
-4. Write new fastq files that include high quality and trimmed sequences 
-5. Re-inspect the quality of the reads (intuition check to make sure that we have it)
+# Now, let's run a for loop to symbolically link the data! 
+for FILE in `ls /workdir/in_class_data/raw_gzipped_seqs/*.fastq.gz`
+  do
+  ln -s $FILE /workdir/<your_netID>/SalinityGradient_16S/data/01_DADA2/01_raw_gzipped_fastqs/
+  done
+```
+
+# load R libraries
+```{r load libraries}
+#efficiently load with pac man
+pacman::p_load(tidyverse, dada2, phyloseq, DT, devtools, install=FALSE)
+```
+
+# Load in the raw sequencing data
+```{r}
+#set the path
+
+```
+
+
+# Visualize and inspect sequencing data to assess the quality of the sequencing reads.
+
+# Filter by the quality and trim primers from sequencing data
+
+# Write new fastq files that include high quality and trimmed sequences 
+
+# Re-inspect the quality of the reads (intuition check to make sure that we have it)
+
 6. Infer the error rate on the forward R1 and reverse R2 reads.
 **DADA2 building the error model**
 7. Apply the error model and infer ASVs on the forward and reverse reads individually.
