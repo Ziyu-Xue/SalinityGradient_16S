@@ -1,0 +1,210 @@
+---
+title: "Assigning ASVs with DADA2"
+output: html_document
+date: "2025-03-05"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      fig.align = "center",
+                      #send figures generaed in this file to folder below
+                      fig.path = "../figures/02_AssignASVs/")
+```
+
+#setting up environment
+## set seed
+```{r set-seed}
+set.seed(20020718)
+```
+
+## load packages
+```{r load-packages}
+pacman::p_load(tidyverse, devtools, dada2, patchwork, DT, install=FALSE)
+```
+
+# load filtered fastq files
+```{r load-filtered-fastqs}
+#place filtered seq files into a variable
+filtered_fastqs_path<-"data/01_DADA2/02_filtered_fastqs"
+#intuition check
+filtered_fastqs_path
+
+#create forward vector
+filtered_forward_reads<-
+  list.files(filtered_fastqs_path, pattern="R1_filtered.fastq.gz", full.names = TRUE)
+#check
+filtered_forward_reads[1:5]
+
+#create reverse vector
+filtered_reverse_reads<-
+  list.files(filtered_fastqs_path, pattern="R2_filtered.fastq.gz", full.names = TRUE)
+#check
+filtered_reverse_reads[1:5]
+```
+# sample names
+```{r sample-names}
+# Create vector of sample names from the filenames 
+sample_names <- sapply(strsplit(basename(filtered_forward_reads), "_"), `[`,1) 
+
+# Intuition Check 
+head(sample_names)
+```
+
+# error modelling
+```{r learn-erros}
+# forward reads
+error_forward_reads <-
+  learnErrors(filtered_forward_reads, multithread=6)
+
+# plot
+forward_error_plot<-
+  plotErrors(error_forward_reads,nominalQ = TRUE)+
+  labs(title = "Forward Reads: Error Model")
+
+# reverse reads
+error_reverse_reads <-
+  learnErrors(filtered_reverse_reads, multithread=6)
+
+# plot
+reverse_error_plot<-
+  plotErrors(error_reverse_reads,nominalQ = TRUE)+
+  labs(title = "Reverse Reads: Error Model")
+
+error_plot<- forward_error_plot+reverse_error_plot
+error_plot
+```
+# infer ASVs
+```{r infer-ASVs}
+# forward reads
+dada_forward<-
+  dada(filtered_forward_reads,
+       err=error_forward_reads,
+       multithread=6)
+
+# take a look at the data
+typeof(dada_forward)
+dada_forward$`20211005-MA-SCS2W_R1_filtered.fastq.gz`
+
+# reverse reads
+dada_reverse<-
+  dada(filtered_reverse_reads,
+       err=error_reverse_reads,
+       multithread = 6)
+
+#check data
+dada_reverse[30]
+
+```
+# merge forward and reverse ASVs
+```{r merge-ASVs}
+merged_ASVs<-
+  mergePairs(dada_forward, filtered_forward_reads,
+             dada_reverse, filtered_reverse_reads,
+             verbose=TRUE)
+
+# evaluate the data output
+typeof(merged_ASVs)
+length(merged_ASVs)
+names(merged_ASVs)
+
+# inspect further
+head(merged_ASVs)
+# to look at a specific sample
+merged_ASVs$ `20210602-MA-ABB1F_R1_filtered.fastq.gz`
+```
+
+#create raw ASV count table
+```{r raw-ASV-count-table}
+# raw ASV
+raw_ASV_table<- makeSequenceTable(merged_ASVs)
+
+#check
+dim(raw_ASV_table)
+typeof(raw_ASV_table)
+class(raw_ASV_table)
+
+# write out the raw_asv_table
+write.table(raw_ASV_table, file="data/01_DADA2/raw_ASV_count.tsv",
+            sep="\t",
+            quote=FALSE,
+            col.names=NA)
+
+```
+
+#assess the ASV length
+some more QC
+```{r assess-ASV-length}
+
+#creating a table to inspect the distribution of ASV lengths
+table(nchar(getSequences(raw_ASV_table)))
+
+#plot
+data.frame(ASV_length=nchar(getSequences(raw_ASV_table))) %>%
+  ggplot(aes(x=ASV_length))+
+  geom_histogram()+
+  #modify x-axis limits
+  scale_x_continuous(limits=c(0,500))
+  labs(title ="Raw ASV lengths",
+       y="Number of ASVs", x ="ASV sequence length (bps)")
+
+```
+
+#trim ASVs
+```{r trim-ASVs}
+# only pull ASVs that have a length of 245 bps
+raw_ASV_table_trimmed<-
+  raw_ASV_table[,nchar(getSequences(raw_ASV_table)) ==245]
+
+#intuition check
+table(nchar(getSequences(raw_ASV_table_trimmed)))
+#can use View(raw_ASV_table) in console to view the table
+```
+
+#remove chimeras
+```{r rm_chimeras}
+noChimeras_ASV_table<-
+  removeBimeraDenovo(raw_ASV_table_trimmed,
+                     method="consensus",
+                     multithread=6,
+                     verbose=TRUE)
+
+#structure of data
+dim(noChimeras_ASV_table)
+dim(raw_ASV_table_trimmed)
+
+
+```
+
+#track number of reads DADA2 workflow
+
+# Goals
+1. infer errors in our sequences, separately on forward and reverse reads
+2. assign ASVs on both forward and reverse reads separately. Apply error model.
+3. merge the forward and reverse reads for ASVs into "contiguous ASVs".
+4. generate first draft of ASV count table.
+5. quality trimming ASV lengths
+6. remove chimeras
+7. assign taxonomy with Silva database
+8. write out relevant files: `asv_table`, `asv_fasta`, `tax_table` and `tax_data`
+```{r}
+
+```
+
+## input
+1.filtered fastq files generated from `01_QualityTrimming.Rmd`
+2. sample name vector
+
+##output
+1. `asv_table`
+2. `asv_fasta`
+3. `tax_table` 
+4. `tax_data`
+
+# session information
+# at the bottom of every file
+```{r session-info}
+# ensure reproducibility with package version information
+devtools::session_info()
+
+```
+
