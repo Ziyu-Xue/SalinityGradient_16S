@@ -1,0 +1,218 @@
+---
+title: "Untitled"
+output: html_document
+date: "2025-03-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      fig.align = "center",
+                      #send figures generaed in this file to folder below
+                      fig.path = "../figures/03_PreProcessing/")
+```
+
+#Goals
+
+Remove any potential contaminants and evaluate the accuracy of our sequencing run. Then, we will write our final data projects
+
+1. load in data that we've generated: `asv_table`,  `tax_table`, and metadata(which includes `metadata.csv` and `track_reads_reads). We created these files in `analysis/02_AssignASV.Rmd
+2. Remove any ASVs that are chloroplasts.
+3. Remove ASVs that are mitochondria.
+4. Evaluate any ASVs from the negative controls. Then, remove negative controls.
+5. Evaluate the mock community (positive control). Accuracy of sequencing.
+6. Check for reverse complements.
+7. Check the sequencing depth of samples. Remove obvious samples with too few reads.
+
+
+## Input
+
+1. Metadata: `metadata.csv` and `track_read_counts.RData`.
+2. ASV table: `data/01_DADA2/ASV_table.csv`.
+3. Taxonomy table: `data/01_DADA2/ASV_taxanomy.tsv`
+
+## Output
+
+1. A pre-processed phyloseq object (54 object): `raw_preprocessed-physeq.RData`
+
+# set environment
+
+##load packages
+```{r load-packages}
+install.packages("BiocManager")
+BiocManager::install("Biostrings")
+
+#load packages with pacman
+pacman::p_load(devtools, phyloseq, Biostrings, tidyverse, install=FALSE)
+```
+
+## load data
+
+### 1. metadata
+- copy '/workdir/in_class_data/metadata.csv'
+- copy '/workdir/in_class_data/track_read_counts.RData'
+- to data folder
+
+asv table=asv (row) x sample names
+tax=asv x taxonomy
+metadata=samplename x info
+```{r load-metadata}
+metadata_df<-
+ read_csv("data/metadata.csv")%>%
+   #fix column names
+   rename("sample_names" = "...1" ) %>%
+   #add sample names also as a column
+   mutate(names=sample_names)
+
+# inspect
+head(metadata_df)
+dim(metadata_df)
+
+# include dada2 output
+load("data/01_DADA2/track_read_counts.RData")
+
+# take a look
+head(track_counts_df)
+dim(track_counts_df)
+
+
+# fix sample names and track reads
+track_counts_df$sample_names<-sapply(strsplit(track_counts_df$sample_names,"_"),`[`,1)
+
+# intuition check
+head(track_counts_df$sample_names)
+
+#what's different?
+setdiff(track_counts_df$sample_names, metadata_df$sample_names)
+
+#let's do a filtering join with left join
+metadata_final_df<-
+  metadata_df%>%
+    left_join(.,track_counts_df, by="sample_names")%>%
+    # sample names to the rownames to merge into phyloseq
+    column_to_rownames(var="sample_names")
+
+#check
+dim(metadata_final_df)
+```
+
+## 2. ASV table
+copy ASV_table.tsv, ASV_taxonomy.tsv data over to my workdir, salinity, data, 01_DADA2
+```{r load-asv-table}
+asv_df<-
+read.delim(file="data/01_DADA2/ASV_table.tsv", sep="\t",
+           # add the column names and row names
+           header = TRUE, row.names = 1)%>%
+  dplyr::select(-"CJ.V08.P")
+
+# inspect
+asv_df[1:3,1:3]
+
+#fix column names
+##remove the X: denote only X at the beginning "^"
+colnames(asv_df)<-sub(pattern="^X", replacement="",colnames(asv_df))
+## replace the . with a -: "\\." since . is a special charater in regex
+colnames(asv_df)<-gsub(pattern="\\.", replacement="-" , colnames(asv_df))
+
+#find inspection
+head(colnames(asv_df))
+asv_df[1:3, 1:3]
+```
+
+## 3. taxonamy table
+```{r load-tax-table}
+tax_df<-read.delim("data/01_DADA2/ASV_taxonomy.tsv", sep="\t",
+           # add the column names and row names
+           header = TRUE, row.names = 1)
+
+dim(tax_df)
+dim(asv_df)
+
+#add check
+stopifnot(rownames(asv_df)==rownames(tax_df))
+```
+
+#hand off to phyloseq
+```{r phyloseq-handoff}
+raw_physeq<-
+phyloseq(otu_table(asv_df,taxa_are_rows = TRUE),
+         sample_data(metadata_final_df),
+         tax_table(as.matrix(tax_df)))
+
+#save
+save(raw_physeq, file="data/03_PreProcessing/raw_physeq.RData")
+
+```
+
+
+# clean up the data
+
+remove chloroplasts and mitochondria
+```{r rm-chloro}
+noChloros_physeq<-
+raw_physeq%>%
+  subset_taxa(Order !="Chloroplast" | is.na(Order))
+
+#how many asvs were chloroplasts?
+numChloros_ASVs<-ntaxa(raw_physeq)-ntaxa(noChloros_physeq)
+```
+
+what about mitochondria
+```{r rm-mitos}
+noChlorosMitos_physeq<-
+noChloros_physeq%>%
+  subset_taxa(Family !="Mitochondria" | is.na(Family))
+
+#how many ASVs were mitochondria?
+numMitos_ASVs<-ntaxa(noChloros_physeq)-ntaxa(noChlorosMitos_physeq)
+
+```
+
+# evaluate and remove control samples
+```{r neg-controls}
+#make a phyloseq object with only the negative controls
+neg_control_samples<-c("WaterControl","022um-Control","3um-Control","DNA-Ext-Control")
+
+neg_control_physeq<-
+noChlorosMitos_physeq%>%
+  subset_samples(., names %in% neg_control_samples)%>%
+  # rm ASVs with 0 counts
+  prune_taxa(taxa_sums(.)>0,.)
+
+#take a look at the ASV abundances in our negative controls
+neg_control_physeq%>%
+  plot_bar(., "ASV", fill = "ASV")
+
+#what's the abundance of these neg control asvs in real samples
+# create vector of asvs
+neg_controlASVs_vec<-
+  neg_control_physeq%>%
+  tax_table()%>%
+  data.frame()%>%
+  dplyr::select(ASV)%>%
+  as.vector()
+  
+# use vector to subset from larger dataset, creating a new phyloseq object
+neg_controlASVs_physeq<-
+noChlorosMitos_physeq%>%
+  subset_taxa(., ASV%in% neg_controlASVs_vec$ASV)
+
+#plot abundances of neg controls ASVs
+neg_controlASVs_physeq%>%
+  plot_bar(.,"ASV", facet_grid = Sample_or_Control~.)
+
+#create a new vector with all ASVs except ASV17 and 50
+negControlASVs_rm<-dplyr::setdiff(neg_controlASVs_vec$ASV, c("ASV_0017","ASV_0050"))
+
+#make new phyloseq object with neg control asvs removes
+noChloroMitosNegControls_physeq<-
+noChlorosMitos_physeq%>%
+  #rm ASVs
+  subset_taxa(., !(ASV %in% negControlASVs_rm))%>%
+  #rm neg control samples
+  subset_samples(.,!(names %in% neg_control_samples))
+```
+
+
+
+
+
