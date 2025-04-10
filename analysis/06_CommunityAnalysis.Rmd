@@ -1,0 +1,230 @@
+---
+title: "Between-Sample (Beta) Diversity of Microbes along a Salinity Gradient"
+output: html_document
+date: "2025-04-09"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      fig.path = "../figures/06_CommunityAnalysis")
+```
+
+# Goal
+
+1. load in phyloseq data with rooted tree, colors, functions.
+2. evaluate the sequencing depth and, if needed, remove samples.
+3. normalize the read counts between samples.
+4. calculate community **dis**similarities: numbers will always mean 0=same,1=dissimilar/different.
+    - Sorensen
+    - Bray-Curtis
+    - UniFrac (weighted & unweighted)
+5. run some statistics: PERMANOVA & betadisper
+6. plot some bar plots of specific microbial groups in the data
+
+## Input
+
+1. phylogenetic tree phyloseq object that we created in 'analysis/04_phylogenetic_tree_inspection.Rmd`.
+
+## Output
+
+1. calculated beta-diversity dissimilarity measures.
+2. figures: PCoA and NMDs
+3. statistical tests: PERMANOVA & betadisper
+
+# scientific question
+
+How does microbial concentration change across a salinity gradient?
+
+- *null hypothesis*: no change in microbial community iwth varying salinity
+- *alternative hypothesis*: community composition will change with varying salt concentrations
+  - rare members? jaccard, **sorensen**, unweighted unifrac
+  - dominant members? **bray-curtis**, weighted unifrac
+  - evolutionary related? unweighted and weighted unifrac
+  
+
+# set up
+## set seed
+```{r set-seed}
+set.seed(20020718)
+```
+
+## load packages
+```{r load-packages}
+pacman::p_load(tidyverse, devtools, phyloseq, patchwork, vegan, install = FALSE)
+
+#load colors
+source("code/colors.R")
+#load functions
+source("code/functions.R")
+```
+
+# 1. load in the data
+```{r}
+load("data/04_Phylogenetic_Tree/phytree_preprocessed_physeqs.RData")
+archaeal_rooted_physeq
+
+#intuition check on seq depth
+min(sample_sums(archaeal_rooted_physeq))
+
+#create metadata dataframe
+meta_df<-
+  archaeal_rooted_physeq %>%
+  sample_data()%>%
+  data.frame()
+```
+
+# normalizing the read depth
+
+## 2. explore the raw read counts
+```{r explore-read-counts}
+# calculate read counts per sample
+raw_TotalSeqs_df<-
+  archaeal_rooted_physeq%>%
+    #calculate the total number of sequences/reads
+  sample_sums()%>%
+  data.frame()
+
+# take a look
+head(raw_TotalSeqs_df)
+
+# rename the column
+colnames(raw_TotalSeqs_df)[1]<-"TotalSeqs"
+
+# add a new column of num_ASVs (RAW, non-normalized #ASVs)
+raw_TotalSeqsASVs_df<-
+  raw_TotalSeqs_df%>%
+  mutate(num_ASVs = colSums(otu_table(archaeal_rooted_physeq)>1))
+
+#view(raw_TotalSeqsASVs_df)
+
+# plot a hisotgram of seq depth 
+raw_TotalSeqsASVs_df%>%
+  ggplot(aes(x=TotalSeqs))+
+  geom_histogram(bins=50)+
+  #check max in console max(raw_TotalSeqsASVs_df$)
+  scale_x_continuous(limits =c(0,7500) )+
+  labs(title = "Raw Seq Depth")+
+  theme_bw()
+
+# plot seq depth vs num_ASVs
+raw_TotalSeqsASVs_df%>%
+  ggplot(aes(x=num_ASVs, y=TotalSeqs))+
+  geom_point()+
+  scale_y_continuous(limits=c(0,7500))+
+  geom_smooth(method="lm")+
+  labs(title = "Seq depth vs # ASVs")
+
+#check linear relationship
+summary(lm(TotalSeqs=num_ASVs, data=raw_TotalSeqsASVs_df))
+
+```
+
+# 3. scaling read counts
+```{r scale-reads}
+min(sample_sums(archaeal_rooted_physeq))
+
+#scale the reads
+scaled_physeq<-
+  archaeal_rooted_physeq%>%
+  scale_reads(round="matround")
+
+#look at it
+scaled_physeq
+
+# confirm the sequencing read depth of scaled_physeq
+scaled_TotalSeqs_df<-
+  scaled_physeq%>%
+  sample_sums()%>%
+  data.frame()
+
+colnames(scaled_TotalSeqs_df)[1]<-"TotalSeqs"
+
+# plot it!
+scaled_TotalSeqs_df%>%
+  ggplot(aes(x=TotalSeqs))+
+  geom_histogram(bins=50)+
+  scale_x_continuous(limits=c(0,7500))+
+  theme_bw()
+
+# scaling always gives us a range!
+min(scaled_TotalSeqs_df$TotalSeqs)
+range(scaled_TotalSeqs_df)
+```
+
+# calculate & visualize community dissimilarity
+
+two different visualizations:
+1. PCoA - Eigen-based analysis, linear, axis coefficients are meaningful because they represent the eigenvectors
+2. NMDS - non-linear method, axes are not meaningful, shmush many axes of data into 2 axes
+
+## sorensen dissimilarity 
+
+### calculate dissimilarity
+```{r soren-dist}
+scaled_soren_dist<-
+  phyloseq::distance(scaled_physeq, method="bray",binary=TRUE)
+
+class(scaled_soren_dist)
+#distance matrix: sample to sample
+
+## PERMANOVA: are centroids of clusters different?
+adonis2(scaled_soren_dist ~ station, data=meta_df)
+adonis2(scaled_soren_dist ~ station+ date, data=meta_df, by="margin")
+adonis2(scaled_soren_dist ~ station* date, data=meta_df, by="margin")
+
+#betadisper
+dispr_soren_station<-betadisper(scaled_soren_dist,meta_df$station)
+permutest(dispr_soren_station)
+```
+
+### plot PCoA
+```{r soren-pcoa}
+# first, calculate pcoa with sorenson
+scaled_soren_pcoa<-
+  ordinate(physeq = scaled_physeq,
+           method = "PCoA",
+           distance = "bray", binary=TRUE)
+
+#take a quick look
+str(scaled_soren_pcoa)
+
+# plot it!
+plot_ordination(physeq = scaled_physeq,
+                ordination = scaled_soren_pcoa,
+                color="station",
+                title = "Sorensen PCoA")+
+  scale_color_manual(values=station_colors)+
+  geom_point(size=5, alpha=0.5,aes(color=station))
+  theme_bw()+
+  theme(legend.position = "bottom")
+  
+# u shaped, not good, maybe need more than two dimensions
+  
+  
+```
+
+
+### plot NMDS
+```{r soren-nmds}
+scaled_soren_nmds<-
+  ordinate(physeq = scaled_physeq,
+           method = "NMDS",
+           distance = "bray", binary=TRUE)
+
+plot_ordination(physeq = scaled_physeq,
+                ordination = scaled_soren_nmds,
+                color="station",
+                title = "Sorensen NMDS")+
+  scale_color_manual(values=station_colors)+
+  geom_point(size=5, alpha=0.5,aes(color=station))
+  theme_bw()+
+  theme(legend.position = "bottom")
+  
+  #right now close points mean having similar taxa, particularly rare, because binary measure
+  # if bray-curtis, two points close have similar dominant taxa
+
+  #want stress level to be 0.15
+```
+
